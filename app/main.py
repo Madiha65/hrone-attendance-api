@@ -14,7 +14,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date as date_cls, datetime, time, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from bson import json_util
 from dotenv import load_dotenv
@@ -647,7 +647,7 @@ def employee_monthly(emp_code: str, month: str = Query(..., pattern=MONTH_PATTER
 # --------------------------------------------------------------------------- #
 def department_summary_pipeline(month: str, department: Optional[str]) -> list:
     first, last = month_bounds(month)
-    match = {"joined_on": {"$lte": last.isoformat()}}  # R9 headcount
+    match: dict[str, Any] = {"joined_on": {"$lte": last.isoformat()}}  # R9 headcount
     if department is not None:
         match["department"] = department
     p = "logs."
@@ -902,10 +902,11 @@ def run_explain(command: dict) -> dict:
     return json.loads(json_util.dumps(result, json_options=json_util.RELAXED_JSON_OPTIONS))
 
 
-def need(**params):
-    missing = [k for k, v in params.items() if v is None]
-    if missing:
-        raise HTTPException(422, f"missing required parameter(s): {', '.join(missing)}")
+def required(value: Optional[str], name: str) -> str:
+    """Return the value, or raise 422 if the parameter is missing."""
+    if value is None:
+        raise HTTPException(422, f"missing required parameter: {name}")
+    return value
 
 
 @app.get("/admin/explain/{endpoint}")
@@ -938,20 +939,21 @@ def explain_endpoint(
         }
         collection = "attendance_logs"
     elif endpoint == "employee_monthly":
-        need(emp_code=emp_code, month=month)
         collection = "attendance_logs"
-        command = {"aggregate": collection, "pipeline": employee_monthly_pipeline(emp_code, month), "cursor": {}}
+        pipeline = employee_monthly_pipeline(required(emp_code, "emp_code"), required(month, "month"))
+        command = {"aggregate": collection, "pipeline": pipeline, "cursor": {}}
     elif endpoint == "department_summary":
-        need(month=month)
         collection = "employees"
-        command = {"aggregate": collection, "pipeline": department_summary_pipeline(month, department), "cursor": {}}
+        pipeline = department_summary_pipeline(required(month, "month"), department)
+        command = {"aggregate": collection, "pipeline": pipeline, "cursor": {}}
     elif endpoint == "late_leaderboard":
-        need(month=month)
         collection = "attendance_logs"
-        command = {"aggregate": collection, "pipeline": late_leaderboard_pipeline(month, limit, department), "cursor": {}}
+        pipeline = late_leaderboard_pipeline(required(month, "month"), limit, department)
+        command = {"aggregate": collection, "pipeline": pipeline, "cursor": {}}
     else:  # department_trend
-        need(department=department, **{"from": from_, "to": to})
-        d_from, d_to = validate_trend_range(from_, to)
+        dept = required(department, "department")
+        d_from, d_to = validate_trend_range(required(from_, "from"), required(to, "to"))
         collection = "employees"
-        command = {"aggregate": collection, "pipeline": department_trend_pipeline(department, d_from, d_to), "cursor": {}}
+        pipeline = department_trend_pipeline(dept, d_from, d_to)
+        command = {"aggregate": collection, "pipeline": pipeline, "cursor": {}}
     return {"endpoint": endpoint, "collection": collection, "explain": run_explain(command)}
